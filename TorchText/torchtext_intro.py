@@ -23,6 +23,26 @@ def dataset_construction_from_csv(
         to_ignores: List[str],
         min_vocab_freq: int = 1
 ) -> Tuple[TabularDataset, TabularDataset, TabularDataset, int]:
+    """
+    This function construct the train, validation and test datasets starting from raw .csv files. It also builds the
+    vocabulary from the training dataset.
+    :param path: the folder where the .csv files are stored.
+    :param train_dataset: the raw .csv file with the training data.
+    :param valid_dataset: the raw .csv file with the validation data.
+    :param test_dataset: the raw .csv file with the testing data.
+    :param features: list of strings, where each string represent the column name of each of the input features to the
+           model, as they appear in the raw .csv file.
+    :param labels: list of strings, where each string represent the column name of each of the output features (lables)
+           of the model, as they appear in the raw .csv file.
+    :param to_ignores: list of strings, where each string represent the column name of fields that appear in the raw
+           .csv files which are neither features nor labels. These fields will be ignored.
+    :param min_vocab_freq: the minimum frequency a word must have, in the training corpus, in order to be included in
+           the vocabulary. Default: 1.
+    :return: train: the training dataset, converted to a torchtest.data.TabularDataset
+             valid: the evaluation dataset, converted to a torchtest.data.TabularDataset
+             test: the testing dataset, converted to a torchtest.data.TabularDataset
+             vocab_length: the size of the vocabulary built from the training dataset.
+    """
 
     TEXT = Field(sequential=True, tokenize='spacy', lower=True)
     LABEL = Field(sequential=False, use_vocab=False)
@@ -56,6 +76,21 @@ def iterator_construction(
         batch_sizes: Tuple[int, int, int] = (64, 64, 64),  # order: train, valid, test
         device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 ) -> Tuple[BucketIterator, BucketIterator, BucketIterator]:
+    """
+    This function takes torchtext.data.TabularDataset's as input and output the correspondent BucketIterator's,
+    splitting the datasets into batches. This iterator batches examples of similar lengths together, minimizing the
+    amount of padding needed while producing freshly shuffled batches for each new epoch.
+    :param train: a torchtest.data.TabularDataset representing the training dataset
+    :param valid: a torchtest.data.TabularDataset representing the validation dataset
+    :param test: a torchtest.data.TabularDataset representing the testing dataset
+    :param feature: a string represent the name of the input feature to the model. Multiple inputs are not supported.
+    :param batch_sizes: a tuple of 3 integers, each representing the batch size for the train, validation and test set
+           respectively. Default: (64, 64, 64)
+    :param device: the torch.device to be used, either 'cpu' or 'cuda' (gpu) if available
+    :return: train_iter: a torchtext.data.BucketIterator, the iterator for the training dataset
+             valid_iter: a torchtext.data.BucketIterator, the iterator for the validation dataset
+             test_iter: a torchtext.data.BucketIterator, the iterator for the testing dataset
+    """
 
     train_iter, valid_iter, test_iter = BucketIterator.splits(
         (train, valid, test),
@@ -69,6 +104,15 @@ def iterator_construction(
 
 
 class LSTMClass(nn.Module):
+    """
+    This class implements a neural network with the following structure, suitable for a many-to-one regression or
+    classification problem, such as sentiment analysis:
+    - an initial embedding layer mapping numeric word tokens to an embedding matrix
+    - a number of stacked LSTM layers (default 1 layer)
+    - a number of linear fully-connected layers (default 1 layer), each followed by a sigmoid activation.
+    NOTE: The output has not been normalised, as it is expected that the loss function of choice (defined in a
+    separate training function) will apply the necessary scaling.
+    """
     def __init__(
             self,
             vocab_length: int,
@@ -78,6 +122,16 @@ class LSTMClass(nn.Module):
             num_lstm_layers: int = 1,
             num_linear_layers: int = 1,  # must be at least 1, or else this code as it's structured will fail
     ) -> None:
+        """
+        :param vocab_length: the number of tokens (i.e. words) in our vocabulary
+        :param hidden_dim: the size of the LSTM hidden layer, and the subsequent linear fully connected layers.
+        :param output: for a multi-class model, this is the number of classes. For a binary classification problem, this
+               is the number of labels (i.e. for a single binary label, it would be 1). Multiple labels are only
+               supported for binary classification, not for multi-class classification.
+        :param emb_dim: the size of the embedding layer.
+        :param num_lstm_layers: the number of stacked LSTM layers. Default: 1.
+        :param num_linear_layers: the number of stacked linear fully connected layers. Default: 1.
+        """
         super().__init__()
         self.embedding = nn.Embedding(vocab_length, emb_dim)
         self.lstm = nn.LSTM(emb_dim, hidden_dim, num_layers=num_lstm_layers)
@@ -86,6 +140,14 @@ class LSTMClass(nn.Module):
         self.predictor = nn.Linear(hidden_dim, output)
 
     def forward(self, seq: torch.Tensor) -> torch.Tensor:
+        """
+        Implements the forward pass for the model.
+        :param seq: a torch.Tensor of shape(n, b), where n is sentence length, and b the batch size. Sentences shorter
+               than n in the same batch have been padded. Each sentence is represented by the sequence of tokens it is
+               composed of. Each token (word) is represented by an integer mapping that word in the vocabulary.
+        :return: preds: the predictions of the model. A torch.Tensor of size (b, o) where b is batch size, and o is
+                equal to the output parameter defined in the constructor.
+        """
         emb = self.embedding(seq)
         hdn, _ = self.lstm(emb)  # hidden state, cell state (we don't need cell state now)
         feature = hdn[-1, :, :]  # taking the last output from the LSTM (we're dealing with many-to-one problem)
@@ -108,10 +170,29 @@ def training(
         train: TabularDataset,
         valid: TabularDataset,
         feature: str,  # list should only contain one
-        output_type: str,  # either "multiclass" or "binary_labels"
+        output_type: str,  # either "multi_class" or "binary_labels"
         labels: List[str]  # labels should only contain one element if you chose 'multiclass'
         # (multiple labels only supported for binary classification)
 ) -> None:
+    """
+    This function implements the training of the LSTM model. It runs the model both in training and evaluation mode,
+    and logs the losses on the console.
+    :param model:
+    :param epochs:
+    :param optimizer: an appropriate optimizer from the module torch.optim
+    :param loss_fn: an appropriate loss function from the module torch.nn
+    :param train_iterator: the train iterator encoded as torchtext.data.BucketIterator
+    :param valid_iterator: the validation iterator encoded as torchtext.data.BucketIterator
+    :param train: the train dataset (already converted to a torchtext.data.TabularDataset)
+    :param valid: the validation dataset (already converted to a torchtext.data.TabularDataset)
+    :param feature: the string representing the column name of the textual input feature in the original .csv dataset
+    :param output_type: a string, either "multi_class" for multi-class classification, or "binary_labels" for binary
+           classification.
+    :param labels: a list of string, where each string is one of the column names of the output labels in the original
+           .csv dataset. If output_type is "multi_class", the labels list should only contain one string. Multiple
+           labels are only supported for binary classification problems.
+    :return: None.
+    """
     assert any([output_type == option for option in ['multi_class', 'binary_class']]), \
         "Please choose output_type as either 'multi_class' or 'binary_labels'."
     if output_type == 'multi_class':
