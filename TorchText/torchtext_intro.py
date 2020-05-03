@@ -50,8 +50,6 @@ def dataset_construction_from_csv(
     fields.extend([(feature, TEXT) for feature in features])
     fields.extend([(to_ignore, None) for to_ignore in to_ignores])
     fields.extend([(label, LABEL) for label in labels])
-    # NOTE: for some reason, if we add the LABEL before None it causes an error as it doesn't recognize the fields
-    # correctly. This could be a bug, as order should be irrelevant. Need to investigate further
 
     train, valid, test = TabularDataset.splits(
         path=path,
@@ -136,7 +134,7 @@ class LSTMClass(nn.Module):
         self.embedding = nn.Embedding(vocab_length, emb_dim)
         self.lstm = nn.LSTM(emb_dim, hidden_dim, num_layers=num_lstm_layers)
         self.linear_layers = nn.ModuleList([nn.Linear(hidden_dim, hidden_dim) for _ in range(num_linear_layers)])
-        self.sigm = nn.Sigmoid()
+        self.tanh = nn.Tanh()
         self.predictor = nn.Linear(hidden_dim, output)
 
     def forward(self, seq: torch.Tensor) -> torch.Tensor:
@@ -149,14 +147,13 @@ class LSTMClass(nn.Module):
                 equal to the output parameter defined in the constructor.
         """
         emb = self.embedding(seq)
-        hdn, _ = self.lstm(emb)  # hidden state, cell state (we don't need cell state now)
-        feature = hdn[-1, :, :]  # taking the last output from the LSTM (we're dealing with many-to-one problem)
+        all_hidden, (h_n, c_n) = self.lstm(emb)
+        feature = h_n.squeeze()  # taking the last output from the LSTM (we're dealing with many-to-one problem)
         for layer in self.linear_layers:
             feature = layer(feature)
-            feature = self.sigm(feature)
+            feature = self.tanh(feature)
 
         preds = self.predictor(feature)
-        # SHOULD WE ADD A TANH OR SOME NON-LINEARITY HERE?
         return preds
 
 
@@ -206,14 +203,14 @@ def training(
         model.train()  # turn on training mode
         for batch in tqdm(train_dataloader):
             x = getattr(batch, feature)
-            y = torch.cat([getattr(batch, label).unsqueeze(1) for label in labels], dim=1).float()
+            if output_type == 'multi_class':
+                y = getattr(batch, labels[0]).long()
+            elif output_type == 'binary_class':
+                y = torch.cat([getattr(batch, label).unsqueeze(1) for label in labels], dim=1).float()
             # we will concatenate y into a single tensor
             optimizer.zero_grad()
             predictions = model(x)
-            if output_type == 'multi_class':
-                loss = loss_fn(predictions, y[:, 0].long())
-            elif output_type == 'binary_class':
-                loss = loss_fn(predictions, y)
+            loss = loss_fn(predictions, y)
             loss.backward()
             optimizer.step()
             running_loss += loss.data * x.size(0)
@@ -229,7 +226,7 @@ def training(
                 y = torch.cat([getattr(batch, label).unsqueeze(1) for label in labels], dim=1).float()
                 predictions = model(x)
                 if output_type == 'multi_class':
-                    loss = loss_fn(predictions, y[:, 0].long())
+                    loss = loss_fn(predictions, y.long())
                 elif output_type == 'binary_class':
                     loss = loss_fn(predictions, y)
                 val_loss += loss.data * x.size(0)
@@ -280,9 +277,7 @@ if __name__ == '__main__':
         ["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"],
         ['id']
     )
-    train_iter, valid_iter, test_iter = iterator_construction(
-        train, valid, test, batch_sizes=(7, 7, 7), feature='comment_text'
-    )
+    train_iter, valid_iter, test_iter = iterator_construction(train, valid, test, feature='comment_text')
     model = LSTMClass(vocab_length=voc_size, hidden_dim=500, output=6, num_linear_layers=2)
     # output: 6 binary labels
     opt = optim.Adam(model.parameters(), lr=1e-2)
