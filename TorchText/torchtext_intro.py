@@ -207,7 +207,7 @@ def training(
                 y = getattr(batch, labels[0]).long()
             elif output_type == 'binary_class':
                 y = torch.cat([getattr(batch, label).unsqueeze(1) for label in labels], dim=1).float()
-            # we will concatenate y into a single tensor
+                # we will concatenate y into a single tensor
             optimizer.zero_grad()
             predictions = model(x)
             loss = loss_fn(predictions, y)
@@ -223,12 +223,12 @@ def training(
         with torch.no_grad():
             for batch in valid_dataloader:
                 x = getattr(batch, feature)
-                y = torch.cat([getattr(batch, label).unsqueeze(1) for label in labels], dim=1).float()
-                predictions = model(x)
                 if output_type == 'multi_class':
-                    loss = loss_fn(predictions, y.long())
+                    y = getattr(batch, labels[0]).long()
                 elif output_type == 'binary_class':
-                    loss = loss_fn(predictions, y)
+                    y = torch.cat([getattr(batch, label).unsqueeze(1) for label in labels], dim=1).float()
+                predictions = model(x)
+                loss = loss_fn(predictions, y)
                 val_loss += loss.data * x.size(0)
 
         val_loss /= len(valid)
