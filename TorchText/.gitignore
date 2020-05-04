@@ -1,0 +1,10 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+.DS_Store
+notebooks/.vector_cache/
+notebooks/.data/
+.idea/
+.ipynb_checkpoints/
+.data/
